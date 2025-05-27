@@ -1,0 +1,419 @@
+<html>
+<head>
+  <title>CSV Data Analysis Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css"></link>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.2/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3.3.0/build/global/luxon.min.js"></script>
+</head>
+<body class="bg-gray-50 min-h-screen flex flex-col">
+  <header class="bg-white shadow p-4 flex items-center justify-between">
+    <h1 class="text-2xl font-bold text-gray-800"><i class="fas fa-chart-bar mr-2"></i>CSV Data Analysis Dashboard</h1>
+    <label for="csv-upload" class="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded flex items-center">
+      <i class="fas fa-upload mr-2"></i> Upload CSV
+      <input type="file" id="csv-upload" accept=".csv" class="hidden" />
+    </label>
+  </header>
+
+  <main class="flex-grow container mx-auto p-4 flex flex-col md:flex-row gap-6">
+    <section id="filters-section" class="md:w-1/4 bg-white rounded shadow p-4 overflow-auto max-h-[80vh]">
+      <h2 class="text-xl font-semibold mb-4 text-gray-700"><i class="fas fa-filter mr-2"></i>Filters</h2>
+      <div id="filters-container" class="space-y-4">
+        <p class="text-gray-500">Upload a CSV file to see filters.</p>
+      </div>
+    </section>
+
+    <section class="md:w-3/4 flex flex-col gap-6">
+      <section id="summary-section" class="bg-white rounded shadow p-4">
+        <h2 class="text-xl font-semibold mb-4 text-gray-700"><i class="fas fa-info-circle mr-2"></i>Summary Statistics</h2>
+        <div id="summary-container" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 text-gray-700">
+          <p class="text-center text-gray-500">Upload and filter data to see summary statistics.</p>
+        </div>
+      </section>
+
+      <section id="charts-section" class="bg-white rounded shadow p-4 overflow-auto max-h-[60vh]">
+        <h2 class="text-xl font-semibold mb-4 text-gray-700"><i class="fas fa-chart-pie mr-2"></i>Visualizations</h2>
+        <div id="charts-container" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div id="bar-chart" class="w-full h-64"></div>
+          <div id="line-chart" class="w-full h-64"></div>
+          <div id="pie-chart" class="w-full h-64 md:col-span-2"></div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <footer class="bg-white shadow p-4 text-center text-gray-500 text-sm">
+    &copy; 2024 CSV Data Analysis Dashboard
+  </footer>
+
+  <script>
+    const DateTime = luxon.DateTime;
+
+    let originalData = [];
+    let filteredData = [];
+    let columns = [];
+    let columnTypes = {}; // key: column name, value: 'numeric' | 'categorical' | 'date'
+    let filters = {}; // key: column name, value: current filter value(s)
+
+    const csvUpload = document.getElementById('csv-upload');
+    const filtersContainer = document.getElementById('filters-container');
+    const summaryContainer = document.getElementById('summary-container');
+    const barChartDiv = document.getElementById('bar-chart');
+    const lineChartDiv = document.getElementById('line-chart');
+    const pieChartDiv = document.getElementById('pie-chart');
+
+    csvUpload.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        dynamicTyping: false,
+        complete: function(results) {
+          originalData = results.data;
+          columns = results.meta.fields;
+          detectColumnTypes();
+          initializeFilters();
+          applyFilters();
+        },
+        error: function(err) {
+          alert('Error parsing CSV: ' + err.message);
+        }
+      });
+    });
+
+    function detectColumnTypes() {
+      columnTypes = {};
+      for (const col of columns) {
+        const values = originalData.map(row => row[col]).filter(v => v !== null && v !== undefined && v !== '');
+        let numCount = 0;
+        let dateCount = 0;
+        let totalCount = values.length;
+        for (const val of values) {
+          if (!isNaN(parseFloat(val)) && isFinite(val)) {
+            numCount++;
+          } else if (DateTime.fromISO(val).isValid || DateTime.fromFormat(val, 'M/d/yyyy').isValid || DateTime.fromFormat(val, 'd-M-yyyy').isValid) {
+            dateCount++;
+          }
+        }
+        if (numCount / totalCount > 0.8) {
+          columnTypes[col] = 'numeric';
+        } else if (dateCount / totalCount > 0.8) {
+          columnTypes[col] = 'date';
+        } else {
+          columnTypes[col] = 'categorical';
+        }
+      }
+    }
+
+    function initializeFilters() {
+      filtersContainer.innerHTML = '';
+      filters = {};
+      for (const col of columns) {
+        const type = columnTypes[col];
+        if (type === 'categorical') {
+          // Multi-select dropdown
+          const uniqueValues = Array.from(new Set(originalData.map(r => r[col]).filter(v => v !== null && v !== undefined && v !== ''))).sort();
+          filters[col] = new Set(uniqueValues);
+          const filterDiv = document.createElement('div');
+          filterDiv.className = 'flex flex-col';
+          const label = document.createElement('label');
+          label.className = 'font-semibold mb-1 text-gray-700';
+          label.textContent = col;
+          filterDiv.appendChild(label);
+
+          const select = document.createElement('select');
+          select.multiple = true;
+          select.className = 'border rounded p-2 h-32 text-gray-700';
+          for (const val of uniqueValues) {
+            const option = document.createElement('option');
+            option.value = val;
+            option.textContent = val;
+            option.selected = true;
+            select.appendChild(option);
+          }
+          select.addEventListener('change', () => {
+            const selectedOptions = Array.from(select.selectedOptions).map(o => o.value);
+            filters[col] = new Set(selectedOptions);
+            applyFilters();
+          });
+          filterDiv.appendChild(select);
+          filtersContainer.appendChild(filterDiv);
+        } else if (type === 'date') {
+          // Date range picker (two date inputs)
+          const dates = originalData.map(r => r[col]).filter(v => v !== null && v !== undefined && v !== '').map(v => parseDate(v)).filter(d => d !== null).sort((a,b) => a - b);
+          if (dates.length === 0) continue;
+          const minDate = dates[0];
+          const maxDate = dates[dates.length - 1];
+          filters[col] = {start: minDate, end: maxDate};
+
+          const filterDiv = document.createElement('div');
+          filterDiv.className = 'flex flex-col';
+          const label = document.createElement('label');
+          label.className = 'font-semibold mb-1 text-gray-700';
+          label.textContent = col + ' (Date Range)';
+          filterDiv.appendChild(label);
+
+          const container = document.createElement('div');
+          container.className = 'flex gap-2';
+
+          const startInput = document.createElement('input');
+          startInput.type = 'date';
+          startInput.className = 'border rounded p-2 flex-1 text-gray-700';
+          startInput.value = formatDateISO(minDate);
+          startInput.min = formatDateISO(minDate);
+          startInput.max = formatDateISO(maxDate);
+          startInput.addEventListener('change', () => {
+            const newStart = new Date(startInput.value);
+            if (newStart <= filters[col].end) {
+              filters[col].start = newStart;
+              applyFilters();
+            } else {
+              startInput.value = formatDateISO(filters[col].start);
+            }
+          });
+
+          const endInput = document.createElement('input');
+          endInput.type = 'date';
+          endInput.className = 'border rounded p-2 flex-1 text-gray-700';
+          endInput.value = formatDateISO(maxDate);
+          endInput.min = formatDateISO(minDate);
+          endInput.max = formatDateISO(maxDate);
+          endInput.addEventListener('change', () => {
+            const newEnd = new Date(endInput.value);
+            if (newEnd >= filters[col].start) {
+              filters[col].end = newEnd;
+              applyFilters();
+            } else {
+              endInput.value = formatDateISO(filters[col].end);
+            }
+          });
+
+          container.appendChild(startInput);
+          container.appendChild(endInput);
+          filterDiv.appendChild(container);
+          filtersContainer.appendChild(filterDiv);
+        }
+      }
+      if (filtersContainer.children.length === 0) {
+        filtersContainer.innerHTML = '<p class="text-gray-500">No categorical or date columns detected for filtering.</p>';
+      }
+    }
+
+    function parseDate(value) {
+      if (!value) return null;
+      let dt = DateTime.fromISO(value);
+      if (dt.isValid) return dt.toJSDate();
+      dt = DateTime.fromFormat(value, 'M/d/yyyy');
+      if (dt.isValid) return dt.toJSDate();
+      dt = DateTime.fromFormat(value, 'd-M-yyyy');
+      if (dt.isValid) return dt.toJSDate();
+      dt = DateTime.fromFormat(value, 'yyyy-MM-dd');
+      if (dt.isValid) return dt.toJSDate();
+      return null;
+    }
+
+    function formatDateISO(date) {
+      if (!(date instanceof Date)) return '';
+      return date.toISOString().slice(0,10);
+    }
+
+    function applyFilters() {
+      filteredData = originalData.filter(row => {
+        for (const col in filters) {
+          const type = columnTypes[col];
+          const val = row[col];
+          if (type === 'categorical') {
+            if (!filters[col].has(val)) return false;
+          } else if (type === 'date') {
+            const d = parseDate(val);
+            if (!d) return false;
+            if (d < filters[col].start || d > filters[col].end) return false;
+          }
+        }
+        return true;
+      });
+      updateSummary();
+      updateCharts();
+    }
+
+    function updateSummary() {
+      summaryContainer.innerHTML = '';
+      if (filteredData.length === 0) {
+        summaryContainer.innerHTML = '<p class="text-center text-gray-500 col-span-full">No data available for the selected filters.</p>';
+        return;
+      }
+
+      // Show total rows count
+      const totalCountDiv = createSummaryCard('Total Rows', filteredData.length);
+
+      // For numeric columns: average, min, max
+      const numericCols = columns.filter(c => columnTypes[c] === 'numeric');
+      const numericStats = numericCols.map(col => {
+        const nums = filteredData.map(r => parseFloat(r[col])).filter(n => !isNaN(n));
+        if (nums.length === 0) return null;
+        const avg = (nums.reduce((a,b) => a+b, 0) / nums.length).toFixed(2);
+        const min = Math.min(...nums).toFixed(2);
+        const max = Math.max(...nums).toFixed(2);
+        return {col, avg, min, max};
+      }).filter(x => x !== null);
+
+      // For categorical columns: unique count
+      const categoricalCols = columns.filter(c => columnTypes[c] === 'categorical');
+      const categoricalStats = categoricalCols.map(col => {
+        const uniqueVals = new Set(filteredData.map(r => r[col]).filter(v => v !== null && v !== undefined && v !== ''));
+        return {col, uniqueCount: uniqueVals.size};
+      });
+
+      summaryContainer.appendChild(totalCountDiv);
+
+      for (const stat of numericStats) {
+        const card = document.createElement('div');
+        card.className = 'bg-blue-50 rounded p-3 shadow flex flex-col';
+        const title = document.createElement('h3');
+        title.className = 'font-semibold text-blue-700 mb-1';
+        title.textContent = stat.col;
+        card.appendChild(title);
+        const avgP = document.createElement('p');
+        avgP.textContent = `Average: ${stat.avg}`;
+        const minP = document.createElement('p');
+        minP.textContent = `Min: ${stat.min}`;
+        const maxP = document.createElement('p');
+        maxP.textContent = `Max: ${stat.max}`;
+        card.appendChild(avgP);
+        card.appendChild(minP);
+        card.appendChild(maxP);
+        summaryContainer.appendChild(card);
+      }
+
+      for (const stat of categoricalStats) {
+        const card = document.createElement('div');
+        card.className = 'bg-green-50 rounded p-3 shadow flex flex-col';
+        const title = document.createElement('h3');
+        title.className = 'font-semibold text-green-700 mb-1';
+        title.textContent = stat.col;
+        card.appendChild(title);
+        const uniqueP = document.createElement('p');
+        uniqueP.textContent = `Unique Values: ${stat.uniqueCount}`;
+        card.appendChild(uniqueP);
+        summaryContainer.appendChild(card);
+      }
+    }
+
+    function createSummaryCard(title, value) {
+      const card = document.createElement('div');
+      card.className = 'bg-gray-100 rounded p-3 shadow flex flex-col justify-center items-center';
+      const titleEl = document.createElement('h3');
+      titleEl.className = 'font-semibold text-gray-700';
+      titleEl.textContent = title;
+      const valueEl = document.createElement('p');
+      valueEl.className = 'text-2xl font-bold text-gray-900';
+      valueEl.textContent = value;
+      card.appendChild(titleEl);
+      card.appendChild(valueEl);
+      return card;
+    }
+
+    function updateCharts() {
+      if (filteredData.length === 0) {
+        Plotly.purge(barChartDiv);
+        Plotly.purge(lineChartDiv);
+        Plotly.purge(pieChartDiv);
+        barChartDiv.innerHTML = '<p class="text-center text-gray-500 mt-20">No data to display.</p>';
+        lineChartDiv.innerHTML = '<p class="text-center text-gray-500 mt-20">No data to display.</p>';
+        pieChartDiv.innerHTML = '<p class="text-center text-gray-500 mt-20">No data to display.</p>';
+        return;
+      }
+
+      // Bar chart: For first categorical column, show counts of categories
+      const catCols = columns.filter(c => columnTypes[c] === 'categorical');
+      if (catCols.length > 0) {
+        const catCol = catCols[0];
+        const counts = {};
+        for (const row of filteredData) {
+          const val = row[catCol] || 'N/A';
+          counts[val] = (counts[val] || 0) + 1;
+        }
+        const data = [{
+          x: Object.keys(counts),
+          y: Object.values(counts),
+          type: 'bar',
+          marker: {color: '#3b82f6'}
+        }];
+        const layout = {
+          title: `Count of ${catCol}`,
+          margin: {t: 40, b: 50},
+          xaxis: {automargin: true},
+          yaxis: {automargin: true}
+        };
+        Plotly.newPlot(barChartDiv, data, layout, {responsive: true});
+      } else {
+        barChartDiv.innerHTML = '<p class="text-center text-gray-500 mt-20">No categorical column for bar chart.</p>';
+      }
+
+      // Line chart: For first numeric column over first date column (if both exist)
+      const numCols = columns.filter(c => columnTypes[c] === 'numeric');
+      const dateCols = columns.filter(c => columnTypes[c] === 'date');
+      if (numCols.length > 0 && dateCols.length > 0) {
+        const numCol = numCols[0];
+        const dateCol = dateCols[0];
+        // Sort data by date ascending
+        const dataSorted = filteredData
+          .map(r => ({date: parseDate(r[dateCol]), value: parseFloat(r[numCol])}))
+          .filter(d => d.date !== null && !isNaN(d.value))
+          .sort((a,b) => a.date - b.date);
+
+        // Aggregate by date (sum values per date)
+        const agg = {};
+        for (const d of dataSorted) {
+          const key = formatDateISO(d.date);
+          agg[key] = (agg[key] || 0) + d.value;
+        }
+        const dates = Object.keys(agg);
+        const values = Object.values(agg);
+
+        const data = [{
+          x: dates,
+          y: values,
+          type: 'scatter',
+          mode: 'lines+markers',
+          line: {color: '#10b981'}
+        }];
+        const layout = {
+          title: `${numCol} over Time (${dateCol})`,
+          margin: {t: 40, b: 50},
+          xaxis: {automargin: true, type: 'date'},
+          yaxis: {automargin: true}
+        };
+        Plotly.newPlot(lineChartDiv, data, layout, {responsive: true});
+      } else {
+        lineChartDiv.innerHTML = '<p class="text-center text-gray-500 mt-20">No numeric and date columns for line chart.</p>';
+      }
+
+      // Pie chart: For second categorical column (if exists), show distribution
+      if (catCols.length > 1) {
+        const catCol = catCols[1];
+        const counts = {};
+        for (const row of filteredData) {
+          const val = row[catCol] || 'N/A';
+          counts[val] = (counts[val] || 0) + 1;
+        }
+        const data = [{
+          labels: Object.keys(counts),
+          values: Object.values(counts),
+          type: 'pie',
+          marker: {colors: ['#ef4444','#f59e0b','#3b82f6','#10b981','#8b5cf6','#ec4899','#14b8a6']}
+        }];
+        const layout = {
+          title: `Distribution of ${catCol}`,
+          margin: {t: 40, b: 50}
+        };
+        Plotly.newPlot(pieChartDiv, data, layout, {responsive: true});
+      } else {
+        pieChartDiv.innerHTML = '<p class="text-center text-gray-500 mt-20">No second categorical column for pie chart.</p>';
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,596 @@
+<html>
+<head>
+  <title>CSV Data Analysis Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css"></link>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.2/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3.3.0/build/global/luxon.min.js"></script>
+</head>
+<body class="bg-gradient-to-br from-indigo-50 via-white to-green-50 min-h-screen flex flex-col">
+  <header class="bg-gradient-to-r from-indigo-600 via-purple-700 to-pink-600 shadow p-4 flex items-center justify-between text-white">
+    <h1 class="text-3xl font-extrabold tracking-wide flex items-center">
+      <i class="fas fa-chart-bar mr-3 animate-pulse text-yellow-300"></i>CSV Data Analysis Dashboard
+    </h1>
+    <label for="csv-upload" class="cursor-pointer bg-yellow-400 hover:bg-yellow-500 text-indigo-900 font-semibold px-5 py-3 rounded-lg shadow-lg flex items-center transition duration-300">
+      <i class="fas fa-upload mr-2"></i> Upload CSV
+      <input type="file" id="csv-upload" accept=".csv" class="hidden" />
+    </label>
+  </header>
+
+  <main class="flex-grow container mx-auto p-6 flex flex-col md:flex-row gap-8">
+    <section id="filters-section" class="md:w-1/4 bg-white rounded-xl shadow-lg p-6 overflow-auto max-h-[85vh] border-4 border-indigo-300">
+      <h2 class="text-2xl font-bold mb-6 text-indigo-700 flex items-center border-b-2 border-indigo-400 pb-2">
+        <i class="fas fa-filter mr-3 text-yellow-500"></i>Filters
+      </h2>
+      <div id="filters-container" class="space-y-6 text-indigo-800 font-medium text-lg">
+        <p class="text-indigo-400 italic">Upload a CSV file to see filters.</p>
+      </div>
+    </section>
+
+    <section class="md:w-3/4 flex flex-col gap-8">
+      <section id="summary-section" class="bg-white rounded-xl shadow-lg p-6 border-4 border-green-300">
+        <h2 class="text-2xl font-bold mb-6 text-green-700 flex items-center border-b-2 border-green-400 pb-2">
+          <i class="fas fa-info-circle mr-3 text-yellow-500"></i>Summary Statistics
+        </h2>
+        <div id="summary-container" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 text-green-900 font-semibold text-lg">
+          <p class="text-center text-green-400 italic col-span-full">Upload and filter data to see summary statistics.</p>
+        </div>
+      </section>
+
+      <section id="charts-section" class="bg-white rounded-xl shadow-lg p-6 border-4 border-pink-300 overflow-auto max-h-[70vh]">
+        <h2 class="text-2xl font-bold mb-6 text-pink-700 flex items-center border-b-2 border-pink-400 pb-2">
+          <i class="fas fa-chart-pie mr-3 text-yellow-500"></i>Visualizations
+        </h2>
+        <div id="charts-container" class="grid grid-cols-1 md:grid-cols-2 gap-8">
+          <div id="bar-chart" class="w-full h-72 rounded-lg shadow-inner bg-indigo-50 p-2"></div>
+          <div id="line-chart" class="w-full h-72 rounded-lg shadow-inner bg-green-50 p-2"></div>
+          <div id="pie-chart" class="w-full h-72 md:col-span-2 rounded-lg shadow-inner bg-pink-50 p-2"></div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <footer class="bg-gradient-to-r from-indigo-600 via-purple-700 to-pink-600 shadow p-4 text-center text-yellow-200 text-sm font-semibold tracking-wide">
+    &copy; 2024 CSV Data Analysis Dashboard &nbsp;&bull;&nbsp; Built with Tailwind, Plotly, PapaParse & Luxon
+  </footer>
+
+  <script>
+    const DateTime = luxon.DateTime;
+
+    let originalData = [];
+    let filteredData = [];
+    let columns = [];
+    let columnTypes = {}; // key: column name, value: 'numeric' | 'categorical' | 'date'
+    let filters = {}; // key: column name, value: current filter value(s)
+
+    const csvUpload = document.getElementById('csv-upload');
+    const filtersContainer = document.getElementById('filters-container');
+    const summaryContainer = document.getElementById('summary-container');
+    const barChartDiv = document.getElementById('bar-chart');
+    const lineChartDiv = document.getElementById('line-chart');
+    const pieChartDiv = document.getElementById('pie-chart');
+
+    csvUpload.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        dynamicTyping: false,
+        complete: function(results) {
+          originalData = results.data;
+          columns = results.meta.fields;
+          detectColumnTypes();
+          initializeFilters();
+          applyFilters();
+          createColumnSelector();
+        },
+        error: function(err) {
+          alert('Error parsing CSV: ' + err.message);
+        }
+      });
+    });
+
+    function detectColumnTypes() {
+      columnTypes = {};
+      for (const col of columns) {
+        const values = originalData.map(row => row[col]).filter(v => v !== null && v !== undefined && v !== '');
+        let numCount = 0;
+        let dateCount = 0;
+        let totalCount = values.length;
+        for (const val of values) {
+          if (!isNaN(parseFloat(val)) && isFinite(val)) {
+            numCount++;
+          } else if (DateTime.fromISO(val).isValid || DateTime.fromFormat(val, 'M/d/yyyy').isValid || DateTime.fromFormat(val, 'd-M-yyyy').isValid) {
+            dateCount++;
+          }
+        }
+        if (numCount / totalCount > 0.8) {
+          columnTypes[col] = 'numeric';
+        } else if (dateCount / totalCount > 0.8) {
+          columnTypes[col] = 'date';
+        } else {
+          columnTypes[col] = 'categorical';
+        }
+      }
+    }
+
+    // Additional feature: allow user to select which columns to visualize in charts
+    let selectedBarCategory = null;
+    let selectedPieCategory = null;
+    let selectedLineNumeric = null;
+    let selectedLineDate = null;
+
+    function createColumnSelector() {
+      // Remove old selectors if any
+      const oldSelectors = document.getElementById('column-selectors');
+      if (oldSelectors) oldSelectors.remove();
+
+      const container = document.createElement('div');
+      container.id = 'column-selectors';
+      container.className = 'bg-yellow-50 rounded-lg p-4 mb-6 border-2 border-yellow-300 shadow-inner';
+
+      const title = document.createElement('h3');
+      title.className = 'text-xl font-bold mb-4 text-yellow-700 flex items-center';
+      title.innerHTML = '<i class="fas fa-cogs mr-2"></i>Chart Column Selectors';
+      container.appendChild(title);
+
+      // Bar chart category selector (categorical)
+      const barDiv = document.createElement('div');
+      barDiv.className = 'mb-4';
+      const barLabel = document.createElement('label');
+      barLabel.className = 'block font-semibold mb-1 text-yellow-800';
+      barLabel.textContent = 'Bar Chart Category (Categorical)';
+      barDiv.appendChild(barLabel);
+      const barSelect = document.createElement('select');
+      barSelect.className = 'w-full border rounded p-2 text-yellow-900';
+      barSelect.innerHTML = '<option value="">-- Select --</option>';
+      columns.filter(c => columnTypes[c] === 'categorical').forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c;
+        opt.textContent = c;
+        barSelect.appendChild(opt);
+      });
+      barSelect.value = selectedBarCategory || '';
+      barSelect.addEventListener('change', () => {
+        selectedBarCategory = barSelect.value || null;
+        updateCharts();
+      });
+      barDiv.appendChild(barSelect);
+      container.appendChild(barDiv);
+
+      // Pie chart category selector (categorical)
+      const pieDiv = document.createElement('div');
+      pieDiv.className = 'mb-4';
+      const pieLabel = document.createElement('label');
+      pieLabel.className = 'block font-semibold mb-1 text-yellow-800';
+      pieLabel.textContent = 'Pie Chart Category (Categorical)';
+      pieDiv.appendChild(pieLabel);
+      const pieSelect = document.createElement('select');
+      pieSelect.className = 'w-full border rounded p-2 text-yellow-900';
+      pieSelect.innerHTML = '<option value="">-- Select --</option>';
+      columns.filter(c => columnTypes[c] === 'categorical').forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c;
+        opt.textContent = c;
+        pieSelect.appendChild(opt);
+      });
+      pieSelect.value = selectedPieCategory || '';
+      pieSelect.addEventListener('change', () => {
+        selectedPieCategory = pieSelect.value || null;
+        updateCharts();
+      });
+      pieDiv.appendChild(pieSelect);
+      container.appendChild(pieDiv);
+
+      // Line chart numeric selector
+      const lineNumDiv = document.createElement('div');
+      lineNumDiv.className = 'mb-4';
+      const lineNumLabel = document.createElement('label');
+      lineNumLabel.className = 'block font-semibold mb-1 text-yellow-800';
+      lineNumLabel.textContent = 'Line Chart Numeric Column';
+      lineNumDiv.appendChild(lineNumLabel);
+      const lineNumSelect = document.createElement('select');
+      lineNumSelect.className = 'w-full border rounded p-2 text-yellow-900';
+      lineNumSelect.innerHTML = '<option value="">-- Select --</option>';
+      columns.filter(c => columnTypes[c] === 'numeric').forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c;
+        opt.textContent = c;
+        lineNumSelect.appendChild(opt);
+      });
+      lineNumSelect.value = selectedLineNumeric || '';
+      lineNumSelect.addEventListener('change', () => {
+        selectedLineNumeric = lineNumSelect.value || null;
+        updateCharts();
+      });
+      lineNumDiv.appendChild(lineNumSelect);
+      container.appendChild(lineNumDiv);
+
+      // Line chart date selector
+      const lineDateDiv = document.createElement('div');
+      lineDateDiv.className = 'mb-4';
+      const lineDateLabel = document.createElement('label');
+      lineDateLabel.className = 'block font-semibold mb-1 text-yellow-800';
+      lineDateLabel.textContent = 'Line Chart Date Column';
+      lineDateDiv.appendChild(lineDateLabel);
+      const lineDateSelect = document.createElement('select');
+      lineDateSelect.className = 'w-full border rounded p-2 text-yellow-900';
+      lineDateSelect.innerHTML = '<option value="">-- Select --</option>';
+      columns.filter(c => columnTypes[c] === 'date').forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c;
+        opt.textContent = c;
+        lineDateSelect.appendChild(opt);
+      });
+      lineDateSelect.value = selectedLineDate || '';
+      lineDateSelect.addEventListener('change', () => {
+        selectedLineDate = lineDateSelect.value || null;
+        updateCharts();
+      });
+      lineDateDiv.appendChild(lineDateSelect);
+      container.appendChild(lineDateDiv);
+
+      // Insert selectors above summary section
+      const mainSection = document.querySelector('main > section.md\\:w-3\\/4');
+      mainSection.insertBefore(container, mainSection.firstChild);
+    }
+
+    function parseDate(value) {
+      if (!value) return null;
+      let dt = DateTime.fromISO(value);
+      if (dt.isValid) return dt.toJSDate();
+      dt = DateTime.fromFormat(value, 'M/d/yyyy');
+      if (dt.isValid) return dt.toJSDate();
+      dt = DateTime.fromFormat(value, 'd-M-yyyy');
+      if (dt.isValid) return dt.toJSDate();
+      dt = DateTime.fromFormat(value, 'yyyy-MM-dd');
+      if (dt.isValid) return dt.toJSDate();
+      return null;
+    }
+
+    function formatDateISO(date) {
+      if (!(date instanceof Date)) return '';
+      return date.toISOString().slice(0,10);
+    }
+
+    function initializeFilters() {
+      filtersContainer.innerHTML = '';
+      filters = {};
+      for (const col of columns) {
+        const type = columnTypes[col];
+        if (type === 'categorical') {
+          // Multi-select dropdown
+          const uniqueValues = Array.from(new Set(originalData.map(r => r[col]).filter(v => v !== null && v !== undefined && v !== ''))).sort();
+          filters[col] = new Set(uniqueValues);
+          const filterDiv = document.createElement('div');
+          filterDiv.className = 'flex flex-col';
+          const label = document.createElement('label');
+          label.className = 'font-semibold mb-1 text-indigo-700';
+          label.textContent = col;
+          filterDiv.appendChild(label);
+
+          const select = document.createElement('select');
+          select.multiple = true;
+          select.className = 'border rounded p-2 h-32 text-indigo-900 shadow-inner focus:ring-2 focus:ring-indigo-400';
+          for (const val of uniqueValues) {
+            const option = document.createElement('option');
+            option.value = val;
+            option.textContent = val;
+            option.selected = true;
+            select.appendChild(option);
+          }
+          select.addEventListener('change', () => {
+            const selectedOptions = Array.from(select.selectedOptions).map(o => o.value);
+            filters[col] = new Set(selectedOptions);
+            applyFilters();
+          });
+          filterDiv.appendChild(select);
+          filtersContainer.appendChild(filterDiv);
+        } else if (type === 'date') {
+          // Date range picker (two date inputs)
+          const dates = originalData.map(r => r[col]).filter(v => v !== null && v !== undefined && v !== '').map(v => parseDate(v)).filter(d => d !== null).sort((a,b) => a - b);
+          if (dates.length === 0) continue;
+          const minDate = dates[0];
+          const maxDate = dates[dates.length - 1];
+          filters[col] = {start: minDate, end: maxDate};
+
+          const filterDiv = document.createElement('div');
+          filterDiv.className = 'flex flex-col';
+          const label = document.createElement('label');
+          label.className = 'font-semibold mb-1 text-indigo-700';
+          label.textContent = col + ' (Date Range)';
+          filterDiv.appendChild(label);
+
+          const container = document.createElement('div');
+          container.className = 'flex gap-2';
+
+          const startInput = document.createElement('input');
+          startInput.type = 'date';
+          startInput.className = 'border rounded p-2 flex-1 text-indigo-900 shadow-inner focus:ring-2 focus:ring-indigo-400';
+          startInput.value = formatDateISO(minDate);
+          startInput.min = formatDateISO(minDate);
+          startInput.max = formatDateISO(maxDate);
+          startInput.addEventListener('change', () => {
+            const newStart = new Date(startInput.value);
+            if (newStart <= filters[col].end) {
+              filters[col].start = newStart;
+              applyFilters();
+            } else {
+              startInput.value = formatDateISO(filters[col].start);
+            }
+          });
+
+          const endInput = document.createElement('input');
+          endInput.type = 'date';
+          endInput.className = 'border rounded p-2 flex-1 text-indigo-900 shadow-inner focus:ring-2 focus:ring-indigo-400';
+          endInput.value = formatDateISO(maxDate);
+          endInput.min = formatDateISO(minDate);
+          endInput.max = formatDateISO(maxDate);
+          endInput.addEventListener('change', () => {
+            const newEnd = new Date(endInput.value);
+            if (newEnd >= filters[col].start) {
+              filters[col].end = newEnd;
+              applyFilters();
+            } else {
+              endInput.value = formatDateISO(filters[col].end);
+            }
+          });
+
+          container.appendChild(startInput);
+          container.appendChild(endInput);
+          filterDiv.appendChild(container);
+          filtersContainer.appendChild(filterDiv);
+        }
+      }
+      if (filtersContainer.children.length === 0) {
+        filtersContainer.innerHTML = '<p class="text-indigo-400 italic">No categorical or date columns detected for filtering.</p>';
+      }
+    }
+
+    function applyFilters() {
+      filteredData = originalData.filter(row => {
+        for (const col in filters) {
+          const type = columnTypes[col];
+          const val = row[col];
+          if (type === 'categorical') {
+            if (!filters[col].has(val)) return false;
+          } else if (type === 'date') {
+            const d = parseDate(val);
+            if (!d) return false;
+            if (d < filters[col].start || d > filters[col].end) return false;
+          }
+        }
+        return true;
+      });
+      updateSummary();
+      updateCharts();
+    }
+
+    function updateSummary() {
+      summaryContainer.innerHTML = '';
+      if (filteredData.length === 0) {
+        summaryContainer.innerHTML = '<p class="text-center text-green-400 italic col-span-full">No data available for the selected filters.</p>';
+        return;
+      }
+
+      // Show total rows count
+      const totalCountDiv = createSummaryCard('Total Rows', filteredData.length, 'bg-indigo-100', 'text-indigo-900');
+
+      // For numeric columns: average, min, max, median, std dev
+      const numericCols = columns.filter(c => columnTypes[c] === 'numeric');
+      const numericStats = numericCols.map(col => {
+        const nums = filteredData.map(r => parseFloat(r[col])).filter(n => !isNaN(n));
+        if (nums.length === 0) return null;
+        const avg = (nums.reduce((a,b) => a+b, 0) / nums.length);
+        const min = Math.min(...nums);
+        const max = Math.max(...nums);
+        const median = calculateMedian(nums);
+        const stddev = calculateStdDev(nums, avg);
+        return {col, avg, min, max, median, stddev};
+      }).filter(x => x !== null);
+
+      // For categorical columns: unique count, top 3 frequent values
+      const categoricalCols = columns.filter(c => columnTypes[c] === 'categorical');
+      const categoricalStats = categoricalCols.map(col => {
+        const vals = filteredData.map(r => r[col]).filter(v => v !== null && v !== undefined && v !== '');
+        const uniqueVals = new Set(vals);
+        const freqMap = {};
+        for (const v of vals) freqMap[v] = (freqMap[v] || 0) + 1;
+        const top3 = Object.entries(freqMap).sort((a,b) => b[1] - a[1]).slice(0,3);
+        return {col, uniqueCount: uniqueVals.size, top3};
+      });
+
+      summaryContainer.appendChild(totalCountDiv);
+
+      for (const stat of numericStats) {
+        const card = document.createElement('div');
+        card.className = 'bg-blue-100 rounded-lg p-4 shadow flex flex-col text-blue-900';
+        const title = document.createElement('h3');
+        title.className = 'font-bold text-lg mb-2';
+        title.textContent = stat.col;
+        card.appendChild(title);
+        const avgP = document.createElement('p');
+        avgP.textContent = `Average: ${stat.avg.toFixed(2)}`;
+        const minP = document.createElement('p');
+        minP.textContent = `Min: ${stat.min.toFixed(2)}`;
+        const maxP = document.createElement('p');
+        maxP.textContent = `Max: ${stat.max.toFixed(2)}`;
+        const medianP = document.createElement('p');
+        medianP.textContent = `Median: ${stat.median.toFixed(2)}`;
+        const stddevP = document.createElement('p');
+        stddevP.textContent = `Std Dev: ${stat.stddev.toFixed(2)}`;
+        card.appendChild(avgP);
+        card.appendChild(minP);
+        card.appendChild(maxP);
+        card.appendChild(medianP);
+        card.appendChild(stddevP);
+        summaryContainer.appendChild(card);
+      }
+
+      for (const stat of categoricalStats) {
+        const card = document.createElement('div');
+        card.className = 'bg-green-100 rounded-lg p-4 shadow flex flex-col text-green-900';
+        const title = document.createElement('h3');
+        title.className = 'font-bold text-lg mb-2';
+        title.textContent = stat.col;
+        card.appendChild(title);
+        const uniqueP = document.createElement('p');
+        uniqueP.textContent = `Unique Values: ${stat.uniqueCount}`;
+        card.appendChild(uniqueP);
+        const top3P = document.createElement('p');
+        top3P.textContent = 'Top 3 Values: ';
+        const span = document.createElement('span');
+        span.className = 'font-normal';
+        span.textContent = stat.top3.map(t => `${t[0]} (${t[1]})`).join(', ');
+        top3P.appendChild(span);
+        card.appendChild(top3P);
+        summaryContainer.appendChild(card);
+      }
+    }
+
+    function calculateMedian(arr) {
+      const sorted = arr.slice().sort((a,b) => a-b);
+      const mid = Math.floor(sorted.length / 2);
+      if (sorted.length % 2 === 0) {
+        return (sorted[mid-1] + sorted[mid]) / 2;
+      } else {
+        return sorted[mid];
+      }
+    }
+
+    function calculateStdDev(arr, mean) {
+      const sqDiffs = arr.map(n => (n - mean) ** 2);
+      const avgSqDiff = sqDiffs.reduce((a,b) => a+b, 0) / arr.length;
+      return Math.sqrt(avgSqDiff);
+    }
+
+    function createSummaryCard(title, value, bgClass, textClass) {
+      const card = document.createElement('div');
+      card.className = `${bgClass} rounded-lg p-4 shadow flex flex-col justify-center items-center ${textClass}`;
+      const titleEl = document.createElement('h3');
+      titleEl.className = 'font-bold text-lg';
+      titleEl.textContent = title;
+      const valueEl = document.createElement('p');
+      valueEl.className = 'text-3xl font-extrabold mt-1';
+      valueEl.textContent = value;
+      card.appendChild(titleEl);
+      card.appendChild(valueEl);
+      return card;
+    }
+
+    function updateCharts() {
+      if (filteredData.length === 0) {
+        Plotly.purge(barChartDiv);
+        Plotly.purge(lineChartDiv);
+        Plotly.purge(pieChartDiv);
+        barChartDiv.innerHTML = '<p class="text-center text-indigo-400 mt-24 font-semibold">No data to display.</p>';
+        lineChartDiv.innerHTML = '<p class="text-center text-green-400 mt-24 font-semibold">No data to display.</p>';
+        pieChartDiv.innerHTML = '<p class="text-center text-pink-400 mt-24 font-semibold">No data to display.</p>';
+        return;
+      }
+
+      // Bar chart: selected categorical column counts
+      if (selectedBarCategory && columnTypes[selectedBarCategory] === 'categorical') {
+        const counts = {};
+        for (const row of filteredData) {
+          const val = row[selectedBarCategory] || 'N/A';
+          counts[val] = (counts[val] || 0) + 1;
+        }
+        const sortedKeys = Object.keys(counts).sort((a,b) => counts[b] - counts[a]);
+        const data = [{
+          x: sortedKeys,
+          y: sortedKeys.map(k => counts[k]),
+          type: 'bar',
+          marker: {color: '#6366f1'},
+          hovertemplate: '%{x}: %{y}<extra></extra>'
+        }];
+        const layout = {
+          title: `Count of ${selectedBarCategory}`,
+          margin: {t: 50, b: 70},
+          xaxis: {automargin: true, tickangle: -45},
+          yaxis: {automargin: true},
+          plot_bgcolor: '#eef2ff',
+          paper_bgcolor: '#eef2ff',
+          font: {color: '#4f46e5'}
+        };
+        Plotly.newPlot(barChartDiv, data, layout, {responsive: true});
+      } else {
+        barChartDiv.innerHTML = '<p class="text-center text-indigo-400 mt-24 font-semibold">Select a categorical column for bar chart.</p>';
+      }
+
+      // Line chart: selected numeric over selected date column
+      if (selectedLineNumeric && selectedLineDate && columnTypes[selectedLineNumeric] === 'numeric' && columnTypes[selectedLineDate] === 'date') {
+        const dataSorted = filteredData
+          .map(r => ({date: parseDate(r[selectedLineDate]), value: parseFloat(r[selectedLineNumeric])}))
+          .filter(d => d.date !== null && !isNaN(d.value))
+          .sort((a,b) => a.date - b.date);
+
+        // Aggregate by date (sum values per date)
+        const agg = {};
+        for (const d of dataSorted) {
+          const key = formatDateISO(d.date);
+          agg[key] = (agg[key] || 0) + d.value;
+        }
+        const dates = Object.keys(agg);
+        const values = Object.values(agg);
+
+        const data = [{
+          x: dates,
+          y: values,
+          type: 'scatter',
+          mode: 'lines+markers',
+          line: {color: '#10b981', width: 3},
+          marker: {size: 6}
+        }];
+        const layout = {
+          title: `${selectedLineNumeric} over Time (${selectedLineDate})`,
+          margin: {t: 50, b: 70},
+          xaxis: {automargin: true, type: 'date', tickangle: -45},
+          yaxis: {automargin: true},
+          plot_bgcolor: '#d1fae5',
+          paper_bgcolor: '#d1fae5',
+          font: {color: '#047857'}
+        };
+        Plotly.newPlot(lineChartDiv, data, layout, {responsive: true});
+      } else {
+        lineChartDiv.innerHTML = '<p class="text-center text-green-400 mt-24 font-semibold">Select numeric and date columns for line chart.</p>';
+      }
+
+      // Pie chart: selected categorical column distribution
+      if (selectedPieCategory && columnTypes[selectedPieCategory] === 'categorical') {
+        const counts = {};
+        for (const row of filteredData) {
+          const val = row[selectedPieCategory] || 'N/A';
+          counts[val] = (counts[val] || 0) + 1;
+        }
+        const labels = Object.keys(counts);
+        const values = Object.values(counts);
+        const colors = [
+          '#ef4444', '#f59e0b', '#3b82f6', '#10b981', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#db2777'
+        ];
+        const data = [{
+          labels: labels,
+          values: values,
+          type: 'pie',
+          marker: {colors: colors},
+          textinfo: 'label+percent',
+          hoverinfo: 'label+value+percent',
+          hole: 0.3
+        }];
+        const layout = {
+          title: `Distribution of ${selectedPieCategory}`,
+          margin: {t: 50, b: 50},
+          plot_bgcolor: '#fce7f3',
+          paper_bgcolor: '#fce7f3',
+          font: {color: '#be185d'}
+        };
+        Plotly.newPlot(pieChartDiv, data, layout, {responsive: true});
+      } else {
+        pieChartDiv.innerHTML = '<p class="text-center text-pink-400 mt-24 font-semibold">Select a categorical column for pie chart.</p>';
+      }
+    }
+  </script>
+</body>
+</html>
